@@ -5,7 +5,11 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+import hashlib
+import json
+import secrets
+from base64 import b64decode
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
@@ -16,6 +20,7 @@ app = FastAPI(title="Mergington High School API",
 
 # Mount the static files directory
 current_dir = Path(__file__).parent
+teachers_file = current_dir / "teachers.json"
 app.mount("/static", StaticFiles(directory=os.path.join(Path(__file__).parent,
           "static")), name="static")
 
@@ -78,6 +83,39 @@ activities = {
 }
 
 
+def verify_teacher(request: Request):
+    try:
+        scheme, encoded_credentials = request.headers.get("authorization", "").split(" ", 1)
+        if scheme.lower() != "basic":
+            raise ValueError("Unsupported authentication scheme")
+        decoded_credentials = b64decode(encoded_credentials, validate=True).decode("utf-8")
+        username, separator, password = decoded_credentials.partition(":")
+        if not separator or not username:
+            raise ValueError("Invalid credentials")
+
+        with teachers_file.open(encoding="utf-8") as file:
+            teachers = json.load(file)
+        teacher = teachers.get("teachers", {}).get(username, {})
+        salt = bytes.fromhex(teacher.get("salt", ""))
+        expected_hash = teacher.get("password_hash", "")
+        actual_hash = hashlib.pbkdf2_hmac(
+            "sha256", password.encode("utf-8"), salt, 600_000
+        ).hex()
+    except (AttributeError, FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
+        teacher = {}
+        expected_hash = ""
+        actual_hash = secrets.token_hex(32)
+
+    if not teacher or not secrets.compare_digest(actual_hash, expected_hash):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid teacher credentials",
+            headers={"WWW-Authenticate": 'Basic realm="Teacher access", charset="UTF-8"'},
+        )
+
+    return username
+
+
 @app.get("/")
 def root():
     return RedirectResponse(url="/static/index.html")
@@ -88,8 +126,17 @@ def get_activities():
     return activities
 
 
+@app.post("/auth/login")
+def login(teacher: str = Depends(verify_teacher)):
+    return {"message": "Logged in", "username": teacher}
+
+
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
+def signup_for_activity(
+    activity_name: str,
+    email: str,
+    teacher: str = Depends(verify_teacher),
+):
     """Sign up a student for an activity"""
     # Validate activity exists
     if activity_name not in activities:
@@ -111,7 +158,11 @@ def signup_for_activity(activity_name: str, email: str):
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
+def unregister_from_activity(
+    activity_name: str,
+    email: str,
+    teacher: str = Depends(verify_teacher),
+):
     """Unregister a student from an activity"""
     # Validate activity exists
     if activity_name not in activities:

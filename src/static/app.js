@@ -3,6 +3,87 @@ document.addEventListener("DOMContentLoaded", () => {
   const activitySelect = document.getElementById("activity");
   const signupForm = document.getElementById("signup-form");
   const messageDiv = document.getElementById("message");
+  const accountButton = document.getElementById("account-button");
+  const accountMenu = document.getElementById("account-menu");
+  const showLoginButton = document.getElementById("show-login");
+  const logoutButton = document.getElementById("logout-button");
+  const teacherSession = document.getElementById("teacher-session");
+  const signupContainer = document.getElementById("signup-container");
+  const loginDialog = document.getElementById("login-dialog");
+  const loginForm = document.getElementById("login-form");
+  const loginError = document.getElementById("login-error");
+  let adminAuthorization = null;
+  let teacherUsername = null;
+
+  function updateAdminView() {
+    const isAdmin = adminAuthorization !== null;
+    signupContainer.classList.toggle("hidden", !isAdmin);
+    showLoginButton.classList.toggle("hidden", isAdmin);
+    logoutButton.classList.toggle("hidden", !isAdmin);
+    teacherSession.classList.toggle("hidden", !isAdmin);
+    teacherSession.textContent = isAdmin ? `Signed in as ${teacherUsername}` : "";
+    fetchActivities();
+  }
+
+  accountButton.addEventListener("click", () => {
+    const isExpanded = accountButton.getAttribute("aria-expanded") === "true";
+    accountButton.setAttribute("aria-expanded", String(!isExpanded));
+    accountMenu.classList.toggle("hidden", isExpanded);
+  });
+
+  showLoginButton.addEventListener("click", () => {
+    accountMenu.classList.add("hidden");
+    accountButton.setAttribute("aria-expanded", "false");
+    loginError.classList.add("hidden");
+    loginDialog.showModal();
+  });
+
+  document.getElementById("cancel-login").addEventListener("click", () => {
+    loginDialog.close();
+    loginForm.reset();
+  });
+
+  logoutButton.addEventListener("click", () => {
+    adminAuthorization = null;
+    teacherUsername = null;
+    accountMenu.classList.add("hidden");
+    accountButton.setAttribute("aria-expanded", "false");
+    updateAdminView();
+  });
+
+  loginForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const username = document.getElementById("teacher-username").value;
+    const password = document.getElementById("teacher-password").value;
+
+    try {
+      const encodedCredentials = new TextEncoder().encode(`${username}:${password}`);
+      const authorization = `Basic ${btoa(
+        Array.from(encodedCredentials, (byte) => String.fromCharCode(byte)).join("")
+      )}`;
+      const response = await fetch("/auth/login", {
+        method: "POST",
+        headers: { Authorization: authorization },
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        loginError.textContent = result.detail || "Unable to sign in";
+        loginError.classList.remove("hidden");
+        return;
+      }
+
+      adminAuthorization = authorization;
+      teacherUsername = result.username;
+      loginDialog.close();
+      loginForm.reset();
+      updateAdminView();
+    } catch (error) {
+      loginError.textContent = "Unable to sign in. Please try again.";
+      loginError.classList.remove("hidden");
+      console.error("Error signing in:", error);
+    }
+  });
 
   // Function to fetch activities from API
   async function fetchActivities() {
@@ -12,6 +93,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // Clear loading message
       activitiesList.innerHTML = "";
+      activitySelect.replaceChildren(activitySelect.options[0]);
 
       // Populate activities list
       Object.entries(activities).forEach(([name, details]) => {
@@ -29,8 +111,11 @@ document.addEventListener("DOMContentLoaded", () => {
               <ul class="participants-list">
                 ${details.participants
                   .map(
-                    (email) =>
-                      `<li><span class="participant-email">${email}</span><button class="delete-btn" data-activity="${name}" data-email="${email}">❌</button></li>`
+                    (email) => `<li><span class="participant-email">${email}</span>${
+                      adminAuthorization
+                        ? `<button class="delete-btn" data-activity="${name}" data-email="${email}" aria-label="Remove ${email}">Remove</button>`
+                        : ""
+                    }</li>`
                   )
                   .join("")}
               </ul>
@@ -80,6 +165,7 @@ document.addEventListener("DOMContentLoaded", () => {
         )}/unregister?email=${encodeURIComponent(email)}`,
         {
           method: "DELETE",
+          headers: { Authorization: adminAuthorization },
         }
       );
 
@@ -124,6 +210,7 @@ document.addEventListener("DOMContentLoaded", () => {
         )}/signup?email=${encodeURIComponent(email)}`,
         {
           method: "POST",
+          headers: { Authorization: adminAuthorization },
         }
       );
 
